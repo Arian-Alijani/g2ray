@@ -29,8 +29,7 @@ jobs:
       NODE_VERSION: 20
       PYTHON_VERSION: 3.11
       DOCKER_IMAGE_NAME: "my-project-runner"
-      # متغیر جدید برای مسیر Dockerfile
-      DOCKERFILE_PATH: ".devcontainer" # مسیر پوشه حاوی Dockerfile
+      DOCKERFILE_PATH: ".devcontainer" # مسیر پوشه حاوی Dockerfile و install.sh
 
     steps:
       - name: Checkout repository files
@@ -39,35 +38,52 @@ jobs:
           fetch-depth: 0
 
       # --- مرحله اول: نصب وابستگی‌های اولیه (اگر install.sh وجود دارد) ---
-      # فرض می‌کنیم install.sh هم داخل پوشه .devcontainer است
-      - name: Check for install.sh script in .devcontainer
-        id: check_install
+      - name: Prepare and Execute install.sh
+        id: run_install_script
+        # این step فقط زمانی اجرا می‌شود که install_script در ورودی‌ها true باشد
+        # و همچنین فایل install.sh در مسیر مشخص شده وجود داشته باشد.
+        if: github.event.inputs.install_script == 'true' && steps.check_install_script_exists.outputs.exists == 'true'
+        run: |
+          echo "--- Preparing to execute install.sh ---"
+          # اطمینان از اینکه فایل قابل اجراست
+          chmod +x "${{ env.DOCKERFILE_PATH }}/install.sh"
+
+          echo "--- Executing install.sh ---"
+          # استفاده از set -e برای توقف اجرای workflow در صورت خطا
+          # استفاده از set -o pipefail برای مدیریت خطا در pipeline
+          # استفاده از DEBIAN_FRONTEND=noninteractive برای جلوگیری از سوالات تعاملی apt/dpkg
+          # هدایت خروجی به فایل و نمایش همزمان با tee
+          set -e
+          set -o pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          # اجرای دستور و ذخیره خروجی در فایل لاگ
+          "${{ env.DOCKERFILE_PATH }}/install.sh" 2>&1 | tee "${{ steps.run_install_script.id }}_output.log"
+
+          echo "--- Finished install.sh ---"
+          # نمایش محتوای لاگ برای اطمینان
+          cat "${{ steps.run_install_script.id }}_output.log"
+          # ذخیره کد خروج دستور install.sh برای بررسی‌های بعدی
+          echo "install_exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Check for install.sh script existence
+        id: check_install_script_exists
         run: |
           if [ -f "${{ env.DOCKERFILE_PATH }}/install.sh" ]; then
-            echo "install.sh found in ${{ env.DOCKERFILE_PATH }}. Making it executable."
-            chmod +x "${{ env.DOCKERFILE_PATH }}/install.sh"
+            echo "install.sh found in ${{ env.DOCKERFILE_PATH }}. Proceeding."
             echo "::set-output name=exists::true"
           else
-            echo "install.sh not found in ${{ env.DOCKERFILE_PATH }}. Skipping."
+            echo "install.sh not found in ${{ env.DOCKERFILE_PATH }}. Skipping install step."
             echo "::set-output name=exists::false"
           fi
-
-      - name: Execute install.sh
-        if: steps.check_install.outputs.exists == 'true' && github.event.inputs.install_script == 'true'
-        run: |
-          echo "--- Executing install.sh ---"
-          set -o pipefail
-          # اجرای اسکریپت از مسیر صحیح
-          "${{ env.DOCKERFILE_PATH }}/install.sh" 2>&1 | tee install_script_output.log
-          echo "--- Finished install.sh ---"
-          cat install_script_output.log
 
       # --- مرحله دوم: ساخت ایمیج Docker ---
       - name: Build Docker image from Dockerfile
         run: |
           echo "--- Building Docker image ---"
-          # مشخص کردن مسیر Dockerfile با استفاده از -f و context با "."
-          docker build -t ${{ env.DOCKER_IMAGE_NAME }} -f ${{ env.DOCKERFILE_PATH }}/Dockerfile .
+          # مسیر Dockerfile و context را مشخص می‌کنیم
+          # اضافه کردن --no-cache برای اطمینان از ساخت تمیز ایمیج
+          docker build --no-cache -t ${{ env.DOCKER_IMAGE_NAME }} -f ${{ env.DOCKERFILE_PATH }}/Dockerfile .
           echo "--- Docker image built successfully ---"
 
       # --- مرحله سوم: اجرای کانتینر و گرفتن خروجی ---
@@ -80,50 +96,59 @@ jobs:
           FULL_COMMAND=""
 
           if [ -z "$COMMAND_TO_RUN" ]; then
-            # اگر دستوری داده نشده، از CMD/ENTRYPOINT پیش‌فرض Dockerfile استفاده کن
             echo "No custom command provided. Using Dockerfile's default CMD/ENTRYPOINT."
-            # نام ایمیج را اینجا استفاده می‌کنیم
             FULL_COMMAND="docker run --rm --name project_container ${{ env.DOCKER_IMAGE_NAME }}"
           else
             echo "Executing custom command: '$COMMAND_TO_RUN'"
-            # دستور سفارشی را درون sh -lc اجرا می‌کنیم
+            # دستور سفارشی را درون sh -lc اجرا می‌کنیم تا اطمینان از کامل بودن محیط shell
             FULL_COMMAND="docker run --rm --name project_container ${{ env.DOCKER_IMAGE_NAME }} sh -lc \"\$COMMAND_TO_RUN\""
           fi
 
           echo "Executing: $FULL_COMMAND"
+          # اجرای دستور و capture کردن خروجی (stdout و stderr)
           eval "$FULL_COMMAND" 2>&1 | tee "$OUTPUT_FILE"
+          # گرفتن کد خروج دستور docker run
           CONTAINER_EXIT_CODE=${PIPESTATUS[0]}
 
           echo "--- Container execution finished ---"
           echo "Container exit code: $CONTAINER_EXIT_CODE"
+          # ذخیره کد خروج برای استفاده در مراحل بعدی
           echo "exit_code=$CONTAINER_EXIT_CODE" >> $GITHUB_OUTPUT
 
           if [ "$CONTAINER_EXIT_CODE" -ne 0 ]; then
-            echo "::warning::Container exited with a non-zero status code ($CONTAINER_EXIT_CODE). Check logs for details."
+            # استفاده از ::warning برای نمایش هشدار در لاگ اکشن
+            echo "::warning::Container exited with a non-zero status code ($CONTAINER_EXIT_CODE). Check logs and artifacts for details."
           fi
           echo "--- Captured Output ---"
           cat "$OUTPUT_FILE"
           echo "---------------------"
+          # خروج با کد 0 تا مرحله آپلود artifact همیشه اجرا شود
           exit 0
 
       # --- مرحله چهارم: آپلود خروجی به عنوان Artifact ---
       - name: Upload captured output as artifact
+        # این step فقط زمانی اجرا می‌شود که capture_as_artifact در ورودی‌ها true باشد
         if: github.event.inputs.capture_as_artifact == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: project-execution-output
+          # اضافه کردن فایل لاگ install.sh به artifact ها
           path: |
-            install_script_output.log
+            ${{ steps.run_install_script.id }}_output.log
             terminal_output.log
-          if-no-files-found: ignore
-          retention-days: 7
+          if-no-files-found: ignore # اگر فایلی پیدا نشد، خطا ندهد
+          retention-days: 7 # نگهداری artifact به مدت 7 روز
 
       # --- مرحله پنجم: اعلام وضعیت نهایی ---
       - name: Final Status Report
         run: |
           echo "Workflow finished."
-          if [ "${{ steps.run_container.outputs.exit_code }}" != "0" ]; then
+          # بررسی کد خروج install.sh (اگر اجرا شده باشد)
+          if [[ -n "${{ steps.run_install_script.outputs.install_exit_code }}" && "${{ steps.run_install_script.outputs.install_exit_code }}" != "0" ]]; then
+            echo "::error::The install.sh script exited with status code ${{ steps.run_install_script.outputs.install_exit_code }}. Check the 'project-execution-output' artifact for details."
+          # بررسی کد خروج کانتینر
+          elif [ "${{ steps.run_container.outputs.exit_code }}" != "0" ]; then
             echo "::error::The Docker container exited with status code ${{ steps.run_container.outputs.exit_code }}. Please check the 'project-execution-output' artifact for details."
           else
-            echo "::notice::Container executed successfully. Check the 'project-execution-output' artifact for logs."
+            echo "::notice::Installation script and container executed successfully. Check the 'project-execution-output' artifact for logs."
           fi
