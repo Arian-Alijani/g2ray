@@ -1,34 +1,63 @@
-name: Run Project via install.sh in Dev Container Environment
+name: Build, Run Xray and Stream Logs
 
 on:
+  workflow_dispatch: # امکان اجرای دستی
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main ] # یا هر شاخه‌ای که می‌خواهید
 
 jobs:
-  run-project-with-script:
+  build_run_and_stream_xray:
     runs-on: ubuntu-latest
 
     steps:
+    # 1. دریافت کد از مخزن
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up and Run Project using install.sh
+    # 2. ساخت ایمیج داکر با استفاده از Dockerfile شما
+    #    (این مرحله ایمیج را برای اجرا آماده می کند)
+    - name: Build Docker image
       run: |
-        echo "Setting up and running project via install.sh..."
-        # اطمینان حاصل کنید که فایل install.sh در مسیر صحیح قرار دارد
-        # و قابل اجرا است.
-        chmod +x .devcontainer/install.sh
+        echo "Building Docker image from Dockerfile..."
+        cd .devcontainer
+        # اطمینان از اینکه install.sh و config.json در Dockerfile درست کپی می شوند
+        # همچنین مطمئن شوید که install.sh در Dockerfile به درستی اجرا می شود.
+        docker build -t xray-service .
+        cd ..
+        echo "Docker image built successfully."
 
-        echo "Executing .devcontainer/install.sh..."
-        # اجرای اسکریپت install.sh. فرض بر این است که این اسکریپت
-        # تمام وابستگی‌ها را نصب کرده و سپس پروژه را راه‌اندازی و فعال نگه می‌دارد.
-        # خروجی این دستور مستقیماً در لاگ‌های GitHub Action نمایش داده خواهد شد.
-        ./.devcontainer/install.sh
+    # 3. اجرای کانتینر داکر در حالت Foreground و نمایش لاگ ها
+    - name: Run Xray container and stream logs
+      # این step تا زمانی که کانتینر در حال اجراست، ادامه پیدا می کند.
+      # اگر کانتینر متوقف شود، این step نیز به پایان می رسد.
+      run: |
+        echo "Running Xray container in foreground mode to stream logs..."
+        # اجرای کانتینر در حالت Foreground.
+        # -p 443:443 پورت را فوروارد می کند.
+        # --name xray-container نامی برای کانتینر.
+        # xray-service نام ایمیجی که ساختیم.
+        # CMD در Dockerfile باعث اجرای "xray -c /etc/config.json" می شود.
+        docker run -p 443:443 --name xray-container xray-service
 
-        echo "install.sh script finished. If the project is running, its output should be visible above."
+        echo "Xray container has stopped. Check logs above for output."
+      # هر گونه خطا یا پایان یافتن اجرای کانتینر، باعث پایان این step می شود.
 
-    # اگر install.sh پروژه را در پس‌زمینه اجرا نمی‌کند و شما نیاز دارید
-    # پروسه فعال بماند، ممکن است نیاز به دستوری در انتهای install.sh
-    # (اگر قابل ویرایش است) یا اضافه کردن یک دستور "نگهدارنده" در اینجا باشد.
-    # اما معمولاً اسکریپت‌های اجرای پروژه خودشان پروسه را فعال نگه می‌دارند.
+    # 4. (اختیاری) نمایش وضعیت نهایی کانتینر پس از اتمام step قبلی
+    #    این step فقط در صورتی اجرا می شود که step قبلی با موفقیت به پایان برسد
+    #    و یا اگر خطایی رخ ندهد. اگر کانتینر متوقف شود، step قبلی تمام می شود
+    #    و این step اجرا می شود.
+    - name: Check final container status
+      if: success() || failure() # همیشه این step را اجرا کن، حتی اگر قبلی شکست خورد
+      run: |
+        echo "Checking final Docker container status..."
+        docker ps -a --filter name=xray-container # نمایش وضعیت کانتینر (اجرا شده یا متوقف شده)
+
+    # 5. (اختیاری) پاکسازی کانتینر پس از اتمام Job
+    #    این step اطمینان حاصل می کند که کانتینر حتی اگر job با خطا تمام شود، پاک می شود.
+    - name: Cleanup container
+      if: always() # همیشه اجرا شود، حتی اگر job شکست خورد
+      run: |
+        echo "Cleaning up Xray container..."
+        docker stop xray-container || true # توقف کانتینر (اگر در حال اجراست)، || true برای جلوگیری از شکست job اگر کانتینر از قبل متوقف بود
+        docker rm xray-container || true   # حذف کانتینر
+        echo "Container cleaned up."
