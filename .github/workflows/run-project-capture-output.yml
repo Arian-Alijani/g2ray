@@ -23,36 +23,32 @@ on:
 jobs:
   build-and-run-container:
     runs-on: ubuntu-latest
-    timeout-minutes: 60 # افزایش زمان timeout برای پروژه‌های سنگین‌تر
+    timeout-minutes: 60
 
     env:
-      # تعریف متغیرهای محیطی که ممکن است لازم باشند
       NODE_VERSION: 20
       PYTHON_VERSION: 3.11
-      DOCKER_IMAGE_NAME: "my-project-runner" # نام دلخواه برای ایمیج داکر
+      DOCKER_IMAGE_NAME: "my-project-runner"
+      # متغیر جدید برای مسیر Dockerfile
+      DOCKERFILE_PATH: ".devcontainer" # مسیر پوشه حاوی Dockerfile
 
     steps:
       - name: Checkout repository files
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # اطمینان از دریافت تاریخچه کامل برای install.sh
-
-      - name: Log repository files for context
-        run: |
-          echo "--- Repository Files ---"
-          ls -la
-          echo "----------------------"
+          fetch-depth: 0
 
       # --- مرحله اول: نصب وابستگی‌های اولیه (اگر install.sh وجود دارد) ---
-      - name: Check for install.sh script
+      # فرض می‌کنیم install.sh هم داخل پوشه .devcontainer است
+      - name: Check for install.sh script in .devcontainer
         id: check_install
         run: |
-          if [ -f "install.sh" ]; then
-            echo "install.sh found. Making it executable."
-            chmod +x install.sh
+          if [ -f "${{ env.DOCKERFILE_PATH }}/install.sh" ]; then
+            echo "install.sh found in ${{ env.DOCKERFILE_PATH }}. Making it executable."
+            chmod +x "${{ env.DOCKERFILE_PATH }}/install.sh"
             echo "::set-output name=exists::true"
           else
-            echo "install.sh not found. Skipping."
+            echo "install.sh not found in ${{ env.DOCKERFILE_PATH }}. Skipping."
             echo "::set-output name=exists::false"
           fi
 
@@ -60,8 +56,9 @@ jobs:
         if: steps.check_install.outputs.exists == 'true' && github.event.inputs.install_script == 'true'
         run: |
           echo "--- Executing install.sh ---"
-          set -o pipefail # اطمینان از اینکه خطا در install.sh باعث توقف workflow می‌شود
-          ./install.sh 2>&1 | tee install_script_output.log
+          set -o pipefail
+          # اجرای اسکریپت از مسیر صحیح
+          "${{ env.DOCKERFILE_PATH }}/install.sh" 2>&1 | tee install_script_output.log
           echo "--- Finished install.sh ---"
           cat install_script_output.log
 
@@ -69,8 +66,8 @@ jobs:
       - name: Build Docker image from Dockerfile
         run: |
           echo "--- Building Docker image ---"
-          # استفاده از نامی که در env تعریف کردیم
-          docker build -t ${{ env.DOCKER_IMAGE_NAME }} .
+          # مشخص کردن مسیر Dockerfile با استفاده از -f و context با "."
+          docker build -t ${{ env.DOCKER_IMAGE_NAME }} -f ${{ env.DOCKERFILE_PATH }}/Dockerfile .
           echo "--- Docker image built successfully ---"
 
       # --- مرحله سوم: اجرای کانتینر و گرفتن خروجی ---
@@ -85,22 +82,21 @@ jobs:
           if [ -z "$COMMAND_TO_RUN" ]; then
             # اگر دستوری داده نشده، از CMD/ENTRYPOINT پیش‌فرض Dockerfile استفاده کن
             echo "No custom command provided. Using Dockerfile's default CMD/ENTRYPOINT."
+            # نام ایمیج را اینجا استفاده می‌کنیم
             FULL_COMMAND="docker run --rm --name project_container ${{ env.DOCKER_IMAGE_NAME }}"
           else
-            # اگر دستور داده شده، آن را درون sh -lc اجرا کن تا کامل پشتیبانی شود
             echo "Executing custom command: '$COMMAND_TO_RUN'"
+            # دستور سفارشی را درون sh -lc اجرا می‌کنیم
             FULL_COMMAND="docker run --rm --name project_container ${{ env.DOCKER_IMAGE_NAME }} sh -lc \"\$COMMAND_TO_RUN\""
           fi
 
           echo "Executing: $FULL_COMMAND"
-          # اجرا و capture کردن خروجی (stdout و stderr)
-          # استفاده از tee برای نمایش همزمان در لاگ و ذخیره در فایل
           eval "$FULL_COMMAND" 2>&1 | tee "$OUTPUT_FILE"
-          CONTAINER_EXIT_CODE=${PIPESTATUS[0]} # گرفتن کد خروج دستور docker run
+          CONTAINER_EXIT_CODE=${PIPESTATUS[0]}
 
           echo "--- Container execution finished ---"
           echo "Container exit code: $CONTAINER_EXIT_CODE"
-          echo "exit_code=$CONTAINER_EXIT_CODE" >> $GITHUB_OUTPUT # ذخیره کد خروج برای استفاده در مراحل بعدی
+          echo "exit_code=$CONTAINER_EXIT_CODE" >> $GITHUB_OUTPUT
 
           if [ "$CONTAINER_EXIT_CODE" -ne 0 ]; then
             echo "::warning::Container exited with a non-zero status code ($CONTAINER_EXIT_CODE). Check logs for details."
@@ -108,7 +104,6 @@ jobs:
           echo "--- Captured Output ---"
           cat "$OUTPUT_FILE"
           echo "---------------------"
-          # خروج از اکشن با کد 0 تا همیشه artifact آپلود شود، حتی اگر کانتینر fail شود
           exit 0
 
       # --- مرحله چهارم: آپلود خروجی به عنوان Artifact ---
@@ -120,8 +115,8 @@ jobs:
           path: |
             install_script_output.log
             terminal_output.log
-          if-no-files-found: ignore # اگر فایلی پیدا نشد، خطا ندهد
-          retention-days: 7 # نگهداری artifact به مدت 7 روز
+          if-no-files-found: ignore
+          retention-days: 7
 
       # --- مرحله پنجم: اعلام وضعیت نهایی ---
       - name: Final Status Report
