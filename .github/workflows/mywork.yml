@@ -1,88 +1,34 @@
-name: Run Project in Dev Container Environment and Stream Output
+name: Run Project via install.sh in Dev Container Environment
 
 on:
   push:
-    branches: [ main ] # یا شاخه‌ای که می‌خواهید با push شدن به آن، این اکشن اجرا شود
-  workflow_dispatch: # اجازه می‌دهد اکشن را به صورت دستی اجرا کنید
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  run-devcontainer-project:
+  run-project-with-script:
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4 # استفاده از آخرین نسخه
+      uses: actions/checkout@v4
 
-    - name: Set up Project Environment using Dev Container config
-      # این مرحله سعی می‌کند محیطی مشابه Dev Container را راه‌اندازی کند.
-      # برای این کار، ابتدا فایل install.sh را اجرا می‌کنیم که معمولاً پیش‌نیازها را نصب می‌کند.
-      # سپس devcontainer.json را برای درک پیکربندی استفاده می‌کنیم.
+    - name: Set up and Run Project using install.sh
       run: |
-        echo "Setting up Dev Container environment..."
-        # اطمینان حاصل کنید که دستور install.sh قابل اجرا است
+        echo "Setting up and running project via install.sh..."
+        # اطمینان حاصل کنید که فایل install.sh در مسیر صحیح قرار دارد
+        # و قابل اجرا است.
         chmod +x .devcontainer/install.sh
-        echo "Running install.sh script..."
-        # اجرای اسکریپت نصب
+
+        echo "Executing .devcontainer/install.sh..."
+        # اجرای اسکریپت install.sh. فرض بر این است که این اسکریپت
+        # تمام وابستگی‌ها را نصب کرده و سپس پروژه را راه‌اندازی و فعال نگه می‌دارد.
+        # خروجی این دستور مستقیماً در لاگ‌های GitHub Action نمایش داده خواهد شد.
         ./.devcontainer/install.sh
-        echo "install.sh finished."
 
-        # مرحله بعدی به طور خودکار توسط GitHub Actions مدیریت می‌شود اگر از
-        # ابزارهای استاندارد Dev Container استفاده کنید، اما اینجا فرض می‌کنیم
-        # نیاز به اجرای مستقیم دستورات داریم.
-        # اگر Dockerfile هم دارید، ممکن است بخواهید با Docker build و run هم کار کنید،
-        # اما برای سادگی، ابتدا به شبیه‌سازی محیطی که install.sh می‌سازد می‌پردازیم.
+        echo "install.sh script finished. If the project is running, its output should be visible above."
 
-    - name: Build and Run the Project (keeping it alive)
-      id: run-project
-      # این بخش حیاتی است. باید دستوری را پیدا کنید که پروژه شما را راه‌اندازی کند
-      # و آن را فعال نگه دارد. اگر پروژه شما یک سرور وب یا سرویس دیگری است،
-      # این دستور باید آن را اجرا کند.
-      run: |
-        echo "Starting the project..."
-        # ### بخش مهم برای تنظیم ###
-        # شما باید دستور دقیق اجرای پروژه خود را اینجا قرار دهید.
-        # مثال‌ها:
-        # اگر پروژه Node.js است:
-        # node your_main_script.js
-        # اگر پروژه Python است:
-        # python your_main_script.py
-        # اگر پروژه یک سرور است که باید فعال بماند، از دستوراتی استفاده کنید که پروسه را زنده نگه دارند.
-        # مثال: npm start (اگر package.json شما دستوری برای استارت دارد)
-        # مثال: python manage.py runserver (برای Django)
-        # مثال: flask run (برای Flask)
-
-        # برای اینکه پروسه فعال بماند و خروجی را نمایش دهد، معمولاً نیازی به
-        # ابزارهای اضافی مانند nohup نیست، مگر اینکه اجرای اصلی بلافاصله پایان یابد.
-        # GitHub Actions لاگ‌ها را در زمان واقعی نمایش می‌دهد.
-
-        # ### جایگزین کنید با دستور اجرای واقعی پروژه شما ###
-        # مثال فرضی: فرض کنید فایل اصلی شما app.py است و با python اجرا می‌شود:
-        python .devcontainer/app.py # این فقط یک مثال است، مسیر و نام فایل را با فایل اصلی خودتان جایگزین کنید
-
-        # اگر اجرای دستور بالا بلافاصله تمام می‌شود و شما نیاز دارید
-        # پروسه فعال بماند، ممکن است نیاز به دستوری مانند این داشته باشید (فقط در صورتی که واقعاً لازم باشد):
-        # sleep infinity # این دستور پروسه را تا زمانی که شما آن را متوقف نکنید، فعال نگه می‌دارد.
-        # یا حلقه‌ای که هر چند وقت یکبار چک کند:
-        # while true; do echo "Project is running..."; sleep 300; done
-        # توجه: اگر پروژه شما خودش سرویس‌دهی می‌کند، معمولاً این حلقه‌ها لازم نیستند.
-
-        echo "Project started and should be running. Output will appear above."
-
-    # اگر نیاز به ارتباط با Docker دارید (که معمولاً در CodeSpaces اتفاق می‌افتد):
-    # - name: Set up Docker Buildx
-    #   uses: docker/setup-buildx-action@v2
-    # - name: Login to Docker Hub
-    #   uses: docker/login-action@v2
-    #   with:
-    #     username: ${{ secrets.DOCKERHUB_USERNAME }}
-    #     password: ${{ secrets.DOCKERHUB_TOKEN }}
-    # - name: Build and push Docker image
-    #   uses: docker/build-push-action@v4
-    #   with:
-    #     context: ./.devcontainer/
-    #     file: ./.devcontainer/Dockerfile
-    #     push: true
-    #     tags: yourusername/your-image-name:latest
-    # - name: Run Docker container
-    #   run: docker run -d --name my-project-container yourusername/your-image-name:latest
-    #   # برای نمایش خروجی، ممکن است لازم باشد از docker logs -f my-project-container استفاده کنید
+    # اگر install.sh پروژه را در پس‌زمینه اجرا نمی‌کند و شما نیاز دارید
+    # پروسه فعال بماند، ممکن است نیاز به دستوری در انتهای install.sh
+    # (اگر قابل ویرایش است) یا اضافه کردن یک دستور "نگهدارنده" در اینجا باشد.
+    # اما معمولاً اسکریپت‌های اجرای پروژه خودشان پروسه را فعال نگه می‌دارند.
